@@ -1,0 +1,19 @@
+# Axolotl Launcher Arch 包元数据（.PKGINFO 模板）
+# scripts/axolotl/package-arch.mjs 在打包时会自动覆盖 pkgver / arch / builddate / size 四个动态字段，
+# 其余字段保持此处声明。产物安装方式：sudo pacman -U axolotl-launcher-<pkgver>-<arch>.pkg.tar.zst
+pkgname = axolotl-launcher
+pkgbase = axolotl-launcher
+pkgver = 1.10.0.beta.3.20261020-1
+pkgdesc = Axolotl Launcher - 开源，跨平台的下一代 Minecraft 启动器
+url = https://github.com/Mystic-Stars/Axolotl
+builddate = 0
+packager = Axolotl local build <local@axolotl.invalid>
+arch = x86_64
+size = 0
+license = GPL-3.0-only
+depend = gtk3
+depend = webkit2gtk-4.1
+depend = libayatana-appindicator
+depend = shared-mime-info
+depend = libnotify
+depend = xdg-utils
