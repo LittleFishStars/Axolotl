@@ -93,7 +93,7 @@ function findBinary() {
           ]
     for (const candidate of candidates) if (fs.existsSync(candidate)) return candidate
     throw new Error(
-        `No built launcher binary found (looked for ${candidates.join(', ')}); run the desktop build first or pass --binary`,
+        `No built launcher binary found (looked for ${candidates.join(', ')}); run \`pnpm app:build\` first or pass --binary`,
     )
 }
 
@@ -181,9 +181,7 @@ function extractDeb(deb, pkgdir) {
         run('bsdtar', ['-xf', deb, '-C', tmp])
         const controlDir = path.join(tmp, 'control')
         fs.mkdirSync(controlDir)
-        const controlMember = fs
-            .readdirSync(tmp)
-            .find((entry) => entry.startsWith('control.tar.'))
+        const controlMember = fs.readdirSync(tmp).find((entry) => entry.startsWith('control.tar.'))
         if (!controlMember) throw new Error('Deb archive is missing control.tar')
         run('bsdtar', ['-xf', path.join(tmp, controlMember), '-C', controlDir])
         const controlFile = fs.existsSync(path.join(controlDir, 'control'))
@@ -212,10 +210,19 @@ function extractDeb(deb, pkgdir) {
         if (fs.existsSync(binary)) fs.renameSync(binary, path.join(pkgdir, 'usr/bin', BINARY_NAME))
         const desktop = path.join(pkgdir, 'usr/share/applications', `${RESOURCE_DIR_NAME}.desktop`)
         if (fs.existsSync(desktop)) {
-            fs.renameSync(desktop, path.join(pkgdir, 'usr/share/applications', `${BINARY_NAME}.desktop`))
+            fs.renameSync(
+                desktop,
+                path.join(pkgdir, 'usr/share/applications', `${BINARY_NAME}.desktop`),
+            )
         }
         for (const size of ['128x128', '256x256@2']) {
-            const icon = path.join(pkgdir, 'usr/share/icons/hicolor', size, 'apps', `${RESOURCE_DIR_NAME}.png`)
+            const icon = path.join(
+                pkgdir,
+                'usr/share/icons/hicolor',
+                size,
+                'apps',
+                `${RESOURCE_DIR_NAME}.png`,
+            )
             if (fs.existsSync(icon)) {
                 fs.renameSync(icon, path.join(path.dirname(icon), `${ICON_NAME}.png`))
             }
