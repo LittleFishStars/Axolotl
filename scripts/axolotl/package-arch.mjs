@@ -4,15 +4,20 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { parseArgs } from 'node:util'
 
-import { root, run, version as appVersion } from './desktop-build-utils.mjs'
+import { app, root, run, version as appVersion } from './desktop-build-utils.mjs'
 
-const PRODUCT_BINARY = 'Axolotl Launcher'
 const BINARY_NAME = 'axolotl-launcher'
 const ICON_NAME = 'red.ghs.axolotl'
+const RESOURCE_DIR_NAME = 'Axolotl Launcher'
+
+const ELF_MACHINES = { 0x3e: 'x86_64', 0xb7: 'aarch64' }
 const ARCH_BY_DEB = { amd64: 'x86_64', arm64: 'aarch64' }
 
 const { values } = parseArgs({
     options: {
+        binary: { type: 'string' },
+        profile: { type: 'string', default: 'release' },
+        resources: { type: 'string' },
         deb: { type: 'string' },
         output: { type: 'string', default: path.join(root, 'target/arch') },
         pkginfo: { type: 'string', default: path.join(root, 'packaging/arch/PKGINFO') },
@@ -32,53 +37,6 @@ function spawnCapture(command, args) {
     return result.stdout
 }
 
-function findDeb() {
-    if (values.deb) return path.resolve(values.deb)
-    const directory = path.join(root, 'target/release/bundle/deb')
-    if (!fs.existsSync(directory)) {
-        throw new Error(
-            'No Tauri deb bundle found; run the desktop build first, e.g. `node scripts/axolotl/build-desktop.mjs --profile ci` then `pnpm --filter @modrinth/app tauri bundle --ci --config tauri-release.conf.json`',
-        )
-    }
-    const candidates = fs
-        .readdirSync(directory, { recursive: true })
-        .filter((entry) => entry.endsWith('.deb'))
-        .map((entry) => {
-            const file = path.join(directory, entry)
-            return { file, stats: fs.statSync(file) }
-        })
-        .filter((entry) => entry.stats.isFile())
-        .sort((a, b) => b.stats.mtimeMs - a.stats.mtimeMs)
-    if (candidates.length === 0) throw new Error(`No .deb under ${directory}`)
-    const preferred = candidates.find((entry) => path.basename(entry.file).includes(appVersion()))
-    return (preferred ?? candidates[0]).file
-}
-
-function parseControl(tmp) {
-    const member = fs.readdirSync(tmp).find((entry) => entry.startsWith('control.tar.'))
-    if (!member) throw new Error('Deb archive is missing control.tar')
-    const directory = path.join(tmp, 'control')
-    fs.mkdirSync(directory)
-    run('bsdtar', ['-xf', path.join(tmp, member), '-C', directory])
-    const controlFile = fs.existsSync(path.join(directory, 'control'))
-        ? path.join(directory, 'control')
-        : path.join(directory, './control')
-    const text = fs.readFileSync(controlFile, 'utf8')
-    const control = {}
-    let current = null
-    for (const line of text.split('\n')) {
-        if (line.startsWith(' ') && current) control[current] += line
-        else {
-            const match = line.match(/^([A-Za-z-]+):\s*(.*)$/)
-            if (match) {
-                current = match[1]
-                control[current] = match[2]
-            }
-        }
-    }
-    return control
-}
-
 function walkFiles(directory) {
     return fs
         .readdirSync(directory, { withFileTypes: true, recursive: true })
@@ -91,42 +49,181 @@ function installedSize(pkgdir) {
     }, 0)
 }
 
-function normalizePayload(pkgdir) {
-    const binary = path.join(pkgdir, 'usr/bin', PRODUCT_BINARY)
-    if (fs.existsSync(binary)) {
-        fs.renameSync(binary, path.join(pkgdir, 'usr/bin', BINARY_NAME))
-        fs.chmodSync(path.join(pkgdir, 'usr/bin', BINARY_NAME), 0o755)
+function copyTree(source, destination) {
+    fs.mkdirSync(path.dirname(destination), { recursive: true })
+    fs.cpSync(source, destination, { recursive: true, dereference: true })
+}
+
+function readConfig() {
+    return JSON.parse(fs.readFileSync(path.join(app, 'tauri.conf.json'), 'utf8'))
+}
+
+function archFromElf(file) {
+    const fd = fs.openSync(file, 'r')
+    try {
+        const header = Buffer.alloc(20)
+        fs.readSync(fd, header, 0, 20, 0)
+        if (header.readUInt32BE(0) !== 0x7f454c46) throw new Error(`${file} is not an ELF binary`)
+        const machine = header[5] === 2 ? header.readUInt16BE(18) : header.readUInt16LE(18)
+        const arch = ELF_MACHINES[machine]
+        if (!arch) throw new Error(`Unsupported ELF machine 0x${machine.toString(16)}`)
+        return arch
+    } finally {
+        fs.closeSync(fd)
     }
-    const desktop = path.join(pkgdir, 'usr/share/applications', `${PRODUCT_BINARY}.desktop`)
-    if (fs.existsSync(desktop)) {
-        const text = fs.readFileSync(desktop, 'utf8')
-        const updated = text
-            .split('\n')
-            .map((line) => {
-                if (line.startsWith('Exec=')) {
-                    const codes = line.match(/%[a-zA-Z]/g)?.join(' ') ?? ''
-                    return `Exec=/usr/bin/${BINARY_NAME}${codes ? ` ${codes}` : ''}`
-                }
-                if (line.startsWith('Icon=')) return `Icon=${ICON_NAME}`
-                return line
-            })
-            .join('\n')
-        fs.writeFileSync(desktop, updated)
-        fs.renameSync(
-            desktop,
-            path.join(pkgdir, 'usr/share/applications', `${BINARY_NAME}.desktop`),
+}
+
+function findBinary() {
+    const candidates = values.binary
+        ? [path.resolve(values.binary)]
+        : [
+              path.join(root, 'target', values.profile, 'Axolotl Launcher'),
+              path.join(
+                  root,
+                  'target',
+                  'release',
+                  'bundle',
+                  'deb',
+                  `${RESOURCE_DIR_NAME}_${appVersion()}_amd64`,
+                  'data',
+                  'usr',
+                  'bin',
+                  'Axolotl Launcher',
+              ),
+          ]
+    for (const candidate of candidates) if (fs.existsSync(candidate)) return candidate
+    throw new Error(
+        `No built launcher binary found (looked for ${candidates.join(', ')}); run the desktop build first or pass --binary`,
+    )
+}
+
+function findResources() {
+    const candidates = values.resources
+        ? [path.resolve(values.resources)]
+        : [
+              path.join(root, 'target', values.profile, 'resources', 'blockbench-skin'),
+              path.join(app, 'resources', 'blockbench-skin'),
+          ]
+    for (const candidate of candidates) {
+        if (fs.existsSync(path.join(candidate, 'dist', 'skin.bundle.js.gz'))) return candidate
+    }
+    throw new Error(
+        `No prepared blockbench-skin resources found (looked for ${candidates.join(', ')}); pass --resources`,
+    )
+}
+
+function findIcons() {
+    const icons = {
+        '128x128': path.join(app, 'icons', '128x128.png'),
+        '256x256@2': path.join(app, 'icons', '128x128@2x.png'),
+    }
+    for (const file of Object.values(icons)) {
+        if (!fs.existsSync(file)) throw new Error(`Missing icon ${file}`)
+    }
+    return icons
+}
+
+function desktopEntry(config) {
+    const mimeTypes = config.bundle.fileAssociations.map((association) => association.mimeType)
+    mimeTypes.push(`x-scheme-handler/axolotl`)
+    return [
+        '[Desktop Entry]',
+        `Categories=${config.bundle.category ?? 'Utility'};`,
+        `Exec=/usr/bin/${BINARY_NAME}`,
+        `StartupWMClass="${config.productName}"`,
+        `Icon=${ICON_NAME}`,
+        `Name=${config.productName}`,
+        'Terminal=false',
+        'Type=Application',
+        `MimeType=${mimeTypes.join(';')}`,
+        '',
+    ].join('\n')
+}
+
+function assemblePkgdir(pkgdir) {
+    const config = readConfig()
+    const binary = findBinary()
+    const resources = findResources()
+    const icons = findIcons()
+
+    const binDir = path.join(pkgdir, 'usr/bin')
+    fs.mkdirSync(binDir, { recursive: true })
+    fs.copyFileSync(binary, path.join(binDir, BINARY_NAME))
+    fs.chmodSync(path.join(binDir, BINARY_NAME), 0o755)
+
+    copyTree(
+        resources,
+        path.join(pkgdir, 'usr/lib', RESOURCE_DIR_NAME, 'resources', 'blockbench-skin'),
+    )
+
+    for (const [size, source] of Object.entries(icons)) {
+        const destination = path.join(
+            pkgdir,
+            'usr/share/icons/hicolor',
+            size,
+            'apps',
+            `${ICON_NAME}.png`,
         )
+        fs.mkdirSync(path.dirname(destination), { recursive: true })
+        fs.copyFileSync(source, destination)
     }
-    const icons = path.join(pkgdir, 'usr/share/icons')
-    if (fs.existsSync(icons)) {
-        for (const entry of walkFiles(icons)) {
-            if (entry.name === `${PRODUCT_BINARY}.png`) {
-                fs.renameSync(
-                    path.join(entry.parentPath, entry.name),
-                    path.join(entry.parentPath, `${ICON_NAME}.png`),
-                )
+
+    const desktop = path.join(pkgdir, 'usr/share/applications', `${BINARY_NAME}.desktop`)
+    fs.mkdirSync(path.dirname(desktop), { recursive: true })
+    fs.writeFileSync(desktop, desktopEntry(config))
+
+    return archFromElf(binary)
+}
+
+function extractDeb(deb, pkgdir) {
+    const tmp = fs.mkdtempSync(path.join(path.dirname(pkgdir), '.deb-'))
+    try {
+        run('bsdtar', ['-xf', deb, '-C', tmp])
+        const controlDir = path.join(tmp, 'control')
+        fs.mkdirSync(controlDir)
+        const controlMember = fs
+            .readdirSync(tmp)
+            .find((entry) => entry.startsWith('control.tar.'))
+        if (!controlMember) throw new Error('Deb archive is missing control.tar')
+        run('bsdtar', ['-xf', path.join(tmp, controlMember), '-C', controlDir])
+        const controlFile = fs.existsSync(path.join(controlDir, 'control'))
+            ? path.join(controlDir, 'control')
+            : path.join(controlDir, './control')
+        const control = {}
+        let current = null
+        for (const line of fs.readFileSync(controlFile, 'utf8').split('\n')) {
+            if (line.startsWith(' ') && current) control[current] += line
+            else {
+                const match = line.match(/^([A-Za-z-]+):\s*(.*)$/)
+                if (match) {
+                    current = match[1]
+                    control[current] = match[2]
+                }
             }
         }
+        const arch = ARCH_BY_DEB[control.Architecture]
+        if (!arch) throw new Error(`Unsupported deb architecture: ${control.Architecture}`)
+        const dataMember = fs.readdirSync(tmp).find((entry) => entry.startsWith('data.tar.'))
+        if (!dataMember) throw new Error('Deb archive is missing data.tar')
+        fs.mkdirSync(pkgdir)
+        run('bsdtar', ['-xf', path.join(tmp, dataMember), '-C', pkgdir])
+
+        const binary = path.join(pkgdir, 'usr/bin', RESOURCE_DIR_NAME)
+        if (fs.existsSync(binary)) fs.renameSync(binary, path.join(pkgdir, 'usr/bin', BINARY_NAME))
+        const desktop = path.join(pkgdir, 'usr/share/applications', `${RESOURCE_DIR_NAME}.desktop`)
+        if (fs.existsSync(desktop)) {
+            fs.renameSync(desktop, path.join(pkgdir, 'usr/share/applications', `${BINARY_NAME}.desktop`))
+        }
+        for (const size of ['128x128', '256x256@2']) {
+            const icon = path.join(pkgdir, 'usr/share/icons/hicolor', size, 'apps', `${RESOURCE_DIR_NAME}.png`)
+            if (fs.existsSync(icon)) {
+                fs.renameSync(icon, path.join(path.dirname(icon), `${ICON_NAME}.png`))
+            }
+        }
+        fs.chmodSync(path.join(pkgdir, 'usr/bin', BINARY_NAME), 0o755)
+        return arch
+    } finally {
+        fs.rmSync(tmp, { recursive: true, force: true })
     }
 }
 
@@ -167,7 +264,7 @@ function writeMtree(pkgdir) {
 }
 
 function createPackage(pkgdir, output, pkgver, arch) {
-    const file = path.join(output, `axolotl-launcher-${pkgver}-${arch}.pkg.tar.zst`)
+    const file = path.join(output, `${BINARY_NAME}-${pkgver}-${arch}.pkg.tar.zst`)
     const entries = [
         '.PKGINFO',
         '.MTREE',
@@ -191,21 +288,12 @@ function createPackage(pkgdir, output, pkgver, arch) {
     return file
 }
 
-const deb = findDeb()
 const output = path.resolve(values.output)
 fs.mkdirSync(output, { recursive: true })
 const tmp = fs.mkdtempSync(path.join(output, '.work-'))
 try {
-    run('bsdtar', ['-xf', deb, '-C', tmp])
-    const control = parseControl(tmp)
-    const arch = ARCH_BY_DEB[control.Architecture]
-    if (!arch) throw new Error(`Unsupported deb architecture: ${control.Architecture}`)
-    const data = fs.readdirSync(tmp).find((entry) => entry.startsWith('data.tar.'))
-    if (!data) throw new Error('Deb archive is missing data.tar')
     const pkgdir = path.join(tmp, 'pkg')
-    fs.mkdirSync(pkgdir)
-    run('bsdtar', ['-xf', path.join(tmp, data), '-C', pkgdir])
-    normalizePayload(pkgdir)
+    const arch = values.deb ? extractDeb(path.resolve(values.deb), pkgdir) : assemblePkgdir(pkgdir)
     const pkgver = writePkginfo(pkgdir, arch)
     writeMtree(pkgdir)
     const file = createPackage(pkgdir, output, pkgver, arch)

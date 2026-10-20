@@ -1,5 +1,6 @@
 # Axolotl Launcher Arch 包元数据（.PKGINFO 模板）
-# scripts/axolotl/package-arch.mjs 在打包时会自动覆盖 pkgver / arch / builddate / size 四个动态字段，
+# 由 scripts/axolotl/package-arch.mjs 生成：默认直接从构建产物（二进制 + blockbench-skin + 图标）组装，
+# 传 --deb 时才改走 deb 布局转换；pkgver / arch / builddate / size 四个动态字段会被自动覆盖。
 # 其余字段保持此处声明。产物安装方式：sudo pacman -U axolotl-launcher-<pkgver>-<arch>.pkg.tar.zst
 pkgname = axolotl-launcher
 pkgbase = axolotl-launcher
