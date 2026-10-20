@@ -21,7 +21,7 @@ const { values } = parseArgs({
         deb: { type: 'string' },
         output: { type: 'string', default: path.join(root, 'target/arch') },
         pkginfo: { type: 'string', default: path.join(root, 'packaging/arch/PKGINFO') },
-        pkgrel: { type: 'string', default: '1' },
+        date: { type: 'string' },
         install: { type: 'boolean' },
     },
 })
@@ -234,8 +234,19 @@ function extractDeb(deb, pkgdir) {
     }
 }
 
+function buildDate() {
+    const now = new Date()
+    const pad = (value) => String(value).padStart(2, '0')
+    return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`
+}
+
+function packageVersion() {
+    const base = appVersion().replaceAll('-', '.')
+    return `${base}-${values.date ?? buildDate()}`
+}
+
 function writePkginfo(pkgdir, arch) {
-    const pkgver = `${appVersion().replaceAll('-', '.')}-${values.pkgrel}`
+    const pkgver = packageVersion()
     const overrides = {
         pkgver,
         arch,

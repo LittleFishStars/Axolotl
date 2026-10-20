@@ -1,10 +1,12 @@
 # Axolotl Launcher Arch 包元数据（.PKGINFO 模板）
 # 由 scripts/axolotl/package-arch.mjs 生成：默认直接从构建产物（二进制 + blockbench-skin + 图标）组装，
 # 传 --deb 时才改走 deb 布局转换；pkgver / arch / builddate / size 四个动态字段会被自动覆盖。
+# pkgver 的格式为「官方版本号-日期」（官方版本里的连字符换成点，日期为构建当天 YYYYMMDD），
+# 源码里的版本号保持官方值不动，因此每次改完代码直接重打包就能用 pacman -U 升级安装。
 # 其余字段保持此处声明。产物安装方式：sudo pacman -U axolotl-launcher-<pkgver>-<arch>.pkg.tar.zst
 pkgname = axolotl-launcher
 pkgbase = axolotl-launcher
-pkgver = 1.10.0.beta.3.20261020-1
+pkgver = 1.10.0.beta.3-20261020
 pkgdesc = Axolotl Launcher - 开源，跨平台的下一代 Minecraft 启动器
 url = https://github.com/Mystic-Stars/Axolotl
 builddate = 0
